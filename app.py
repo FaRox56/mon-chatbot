@@ -722,7 +722,7 @@ def home():
             showStep('step-chat');
             const messagesEl = document.getElementById('chatMessages');
             messagesEl.innerHTML = '';
-            addMsg('Bonjour ! Je suis l\'assistant de ' + companyName + '. Comment puis-je vous aider ?', 'bot');
+            addMsg("Bonjour ! Je suis l'assistant de " + companyName + ". Comment puis-je vous aider ?", 'bot');
             document.getElementById('msgInput').focus();
         }
 
