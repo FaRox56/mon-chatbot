@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
+from supabase import create_client
 
 load_dotenv()
 
@@ -19,6 +20,7 @@ app = Flask(__name__)
 CORS(app)
 
 client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+supabase = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_KEY"))
 
 conversations = {}
 
@@ -78,6 +80,16 @@ def scrape():
 
     try:
         pages = scrape_site(url, name)
+        safe_name = re.sub(r"[^a-zA-Z0-9_\-]", "_", name)
+        context_file = f"context_{safe_name}.txt"
+        try:
+            supabase.table("chatbots").insert({
+                "name": name,
+                "website_url": url,
+                "context_file": context_file,
+            }).execute()
+        except Exception:
+            pass
         return jsonify({
             "success": True,
             "message": "Site analysé avec succès",
@@ -137,7 +149,23 @@ def chat():
         "content": reply
     })
 
+    try:
+        supabase.table("conversations").insert({
+            "session_id": session_id,
+            "message": message,
+            "response": reply,
+            "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        }).execute()
+    except Exception:
+        pass
+
     return jsonify({"reply": reply})
+
+
+@app.route("/conversations", methods=["GET"])
+def get_conversations():
+    result = supabase.table("conversations").select("*").order("created_at", desc=True).limit(50).execute()
+    return jsonify(result.data)
 
 
 @app.route("/")
