@@ -9,6 +9,7 @@ import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
 from supabase import create_client
+import threading
 
 load_dotenv()
 
@@ -26,6 +27,7 @@ conversations = {}
 
 # Suivi en mémoire des messages pour /stats
 message_events = []  # [{"timestamp": datetime, "session_id": str}]
+scrape_jobs = {}  # {safe_name: "loading" | "done" | "error"}
 
 
 def scrape_site(url: str, name: str, max_pages: int = 20) -> int:
@@ -78,25 +80,34 @@ def scrape():
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
 
-    try:
-        pages = scrape_site(url, name)
-        safe_name = re.sub(r"[^a-zA-Z0-9_\-]", "_", name)
-        context_file = f"context_{safe_name}.txt"
+    safe_name = re.sub(r"[^a-zA-Z0-9_\-]", "_", name)
+    scrape_jobs[safe_name] = "loading"
+
+    def run():
         try:
-            supabase.table("chatbots").insert({
-                "name": name,
-                "website_url": url,
-                "context_file": context_file,
-            }).execute()
+            scrape_site(url, name)
+            context_file = f"context_{safe_name}.txt"
+            try:
+                supabase.table("chatbots").insert({
+                    "name": name,
+                    "website_url": url,
+                    "context_file": context_file,
+                }).execute()
+            except Exception:
+                pass
+            scrape_jobs[safe_name] = "done"
         except Exception:
-            pass
-        return jsonify({
-            "success": True,
-            "message": "Site analysé avec succès",
-            "pages": pages,
-        })
-    except Exception as e:
-        return jsonify({"success": False, "message": str(e)}), 500
+            scrape_jobs[safe_name] = "error"
+
+    threading.Thread(target=run, daemon=True).start()
+    return jsonify({"success": True, "status": "loading"})
+
+
+@app.route("/scrape-status", methods=["GET"])
+def scrape_status():
+    name = request.args.get("name", "").strip()
+    safe_name = re.sub(r"[^a-zA-Z0-9_\-]", "_", name)
+    return jsonify({"status": scrape_jobs.get(safe_name, "unknown")})
 
 
 @app.route("/stats", methods=["GET"])
@@ -685,10 +696,24 @@ def home():
                 });
             } catch (_) {}
 
-            finishProgress();
-            await new Promise(r => setTimeout(r, 700));
-            showChat();
+            pollStatus(name);
         });
+
+        // ── Polling du statut de scraping ────────────────────────────────
+        function pollStatus(name) {
+            const interval = setInterval(async () => {
+                try {
+                    const res = await fetch('/scrape-status?name=' + encodeURIComponent(name));
+                    const data = await res.json();
+                    if (data.status === 'done' || data.status === 'error') {
+                        clearInterval(interval);
+                        finishProgress();
+                        await new Promise(r => setTimeout(r, 700));
+                        showChat();
+                    }
+                } catch (_) {}
+            }, 2000);
+        }
 
         // ── Affichage du chat ────────────────────────────────────────────
         function showChat() {
